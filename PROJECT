@@ -1,0 +1,16 @@
+domain: example.com
+layout:
+- go.kubebuilder.io/v3
+projectName: custom-controller
+repo: github.com/Superm4n97/custom-controller
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: apiserver
+  kind: BookServer
+  path: github.com/Superm4n97/custom-controller/api/v1alpha1
+  version: v1alpha1
+version: "3"
