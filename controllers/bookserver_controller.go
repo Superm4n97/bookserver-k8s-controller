@@ -18,6 +18,9 @@ package controllers
 
 import (
 	"context"
+	v1 "k8s.io/api/apps/v1"
+	v12 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +34,10 @@ import (
 type BookServerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+func intToPointer(a int32) *int32 {
+	return &a
 }
 
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers,verbs=get;list;watch;create;update;patch;delete
@@ -47,9 +54,68 @@ type BookServerReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
 func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var bookServer apiserverv1alpha1.BookServer
+	if err := r.Get(ctx, req.NamespacedName, &bookServer); err != nil {
+		log.Error(err, "unable to fetch the book server")
+		return ctrl.Result{}, err
+	}
+
+	constructNewDeploymentForBookServer := func(bs *apiserverv1alpha1.BookServer) (*v1.Deployment, error) {
+		newDep := v1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      bs.Name,
+				Labels:    bs.Labels,
+				Namespace: bs.Namespace,
+			},
+			Spec: v1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: bs.Spec.Selector},
+				Replicas: bs.Spec.Repcilas,
+
+				Template: v12.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: bs.Spec.Selector,
+					},
+					Spec: v12.PodSpec{
+						Containers: []v12.Container{
+							{
+								Name:  "BookServer",
+								Image: "superm4n/book-api-server:v0.1.3",
+								Ports: []v12.ContainerPort{
+									{
+										ContainerPort: 8080,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		return &newDep, nil
+	}
+
+	if bookServer.Status.AvailableReplicas == nil {
+		dep, err := constructNewDeploymentForBookServer(&bookServer)
+		if err != nil {
+			log.Error(err, "unable to create new deployment")
+			return ctrl.Result{}, err
+		}
+
+		if err := r.Create(ctx, dep); err != nil {
+			log.Error(err, "unable to create book server")
+			return ctrl.Result{}, err
+		}
+	}
+
+	bookServer.Status.AvailableReplicas = bookServer.Spec.Repcilas
+
+	if err := r.Update(ctx, &bookServer); err != nil {
+		log.Error(err, "unable to update the book server")
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
