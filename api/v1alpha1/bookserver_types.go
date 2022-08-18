@@ -30,7 +30,7 @@ type BookServerSpec struct {
 
 	Name string `json:"name"`
 
-	Label string `json:"label"`
+	Selector map[string]string `json:"selector"`
 
 	Repcilas *int32 `json:"repcilas"`
 }
