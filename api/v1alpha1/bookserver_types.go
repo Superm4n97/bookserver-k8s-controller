@@ -28,11 +28,9 @@ type BookServerSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Name string `json:"name"`
+	Selector metav1.LabelSelector `json:"selector"`
 
-	Selector map[string]string `json:"selector"`
-
-	Repcilas *int32 `json:"repcilas"`
+	Replicas *int32 `json:"replicas"`
 }
 
 // BookServerStatus defines the observed state of BookServer

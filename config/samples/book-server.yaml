@@ -1,0 +1,10 @@
+apiVersion: apiserver.example.com/v1alpha1
+kind: BookServer
+metadata:
+  name: bookserver-sample
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app : bookServer
+
