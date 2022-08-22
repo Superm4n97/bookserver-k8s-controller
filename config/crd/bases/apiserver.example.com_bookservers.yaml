@@ -98,9 +98,15 @@ spec:
                 type: integer
               childDeployment:
                 type: string
+              phase:
+                description: 'INSERT ADDITIONAL STATUS FIELD - define observed state
+                  of cluster Important: Run "make" to regenerate code after modifying
+                  this file'
+                type: string
             required:
             - availableReplicas
             - childDeployment
+            - phase
             type: object
         type: object
     served: true

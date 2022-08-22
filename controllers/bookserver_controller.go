@@ -19,14 +19,17 @@ package controllers
 import (
 	"context"
 	"fmt"
-	v13 "k8s.io/api/apps/v1"
-	v12 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
+	kmc "kmodules.xyz/client-go/client"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	"time"
 
 	apiserverv1alpha1 "github.com/Superm4n97/custom-controller/api/v1alpha1"
@@ -38,14 +41,59 @@ type BookServerReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-func intToPointer(a int32) *int32 {
-	return &a
-}
-
 func getCurrentTime() time.Time {
 	return time.Now()
 }
 
+func getOwnerReference(bs *apiserverv1alpha1.BookServer) []metav1.OwnerReference {
+	return []metav1.OwnerReference{
+		{
+			APIVersion: bs.APIVersion,
+			Kind:       bs.Kind,
+			Name:       bs.Name,
+			UID:        bs.UID,
+		},
+	}
+}
+
+func constructNewDeploymentForBookServer(bs *apiserverv1alpha1.BookServer, depName string) (*appsv1.Deployment, error) {
+	fmt.Println(depName)
+	newDep := appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            depName,
+			Labels:          bs.Labels,
+			Namespace:       bs.Namespace,
+			OwnerReferences: getOwnerReference(bs),
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &bs.Spec.Selector,
+			Replicas: bs.Spec.Replicas,
+
+			Template: core.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: bs.Spec.Selector.MatchLabels,
+				},
+				Spec: core.PodSpec{
+					Containers: []core.Container{
+						{
+							Name:  "bookserver",
+							Image: "superm4n/book-api-server:v0.1.3",
+							Ports: []core.ContainerPort{
+								{
+									ContainerPort: 8080,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return &newDep, nil
+}
+
+//+kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase"
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers/finalizers,verbs=update
@@ -66,100 +114,93 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	klog.Info("Get event for BooksServer name: ", key.Name, " in namespace: ", key.Namespace)
 
-	var bookServer apiserverv1alpha1.BookServer
-	if err := r.Get(ctx, req.NamespacedName, &bookServer); err != nil {
+	fmt.Println("Event occurred")
+
+	bookServer := &apiserverv1alpha1.BookServer{}
+	if err := r.Get(ctx, req.NamespacedName, bookServer); err != nil {
 		fmt.Println("unable to fetch the book server")
 		klog.Error(err, "unable to fetch the book server")
 
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	bookServer = bookServer.DeepCopy()
+
+	// first time create / deployment missing --> new deployment create
+	// deployment  --> check deployment selector, replicas match or not with BookServer
+
+	fmt.Println("current book server replicas: ", *bookServer.Spec.Replicas)
+
+	//create a deployment if not present
+	//------------------------------------------------
+
+	childName := bookServer.Status.ChildDeployment
+	childDep := &appsv1.Deployment{}
+	err := r.Client.Get(ctx, client.ObjectKey{Name: bookServer.Name, Namespace: bookServer.Namespace}, childDep)
+	if err != nil && client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, err
 	}
 
-	getOwnerReference := func(bs *apiserverv1alpha1.BookServer) []metav1.OwnerReference {
-		return []metav1.OwnerReference{
-			{
-				APIVersion: bs.APIVersion,
-				Kind:       bs.Kind,
-				Name:       bs.Name,
-				UID:        bs.UID,
-			},
-		}
-	}
+	if childName == nil || client.IgnoreNotFound(err) == nil {
+		st := fmt.Sprintf("%s-%d", bookServer.Name, getCurrentTime().Unix())
+		childName = &st
 
-	constructNewDeploymentForBookServer := func(bs *apiserverv1alpha1.BookServer) (*v13.Deployment, error) {
-
-		depName := fmt.Sprintf("%s-%d", bs.Name, getCurrentTime().Unix())
-		fmt.Println(depName)
-		newDep := v13.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:            depName,
-				Labels:          bs.Labels,
-				Namespace:       bs.Namespace,
-				OwnerReferences: getOwnerReference(bs),
-			},
-			Spec: v13.DeploymentSpec{
-				Selector: &bs.Spec.Selector,
-				Replicas: bs.Spec.Replicas,
-
-				Template: v12.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: bs.Spec.Selector.MatchLabels,
-					},
-					Spec: v12.PodSpec{
-						Containers: []v12.Container{
-							{
-								Name:  "bookserver",
-								Image: "superm4n/book-api-server:v0.1.3",
-								Ports: []v12.ContainerPort{
-									{
-										ContainerPort: 8080,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		return &newDep, nil
-	}
-
-	//dlst gets the deployment that created by this book server
-	/*
-		var dlst = v13.Deployment{}
-		if err := r.Get(ctx,namespaceName of the deployment,dlst); err != nil {
-			fmt.Println("No deployment found owing by this book server")
-		} else {
-			fmt.Println("deployment found with size of ", dlst.Size())
-		}
-	*/
-
-	fmt.Println(bookServer.Status.AvailableReplicas)
-
-	if bookServer.Status.ChildDeployment == nil {
-		dep, err := constructNewDeploymentForBookServer(&bookServer)
+		_, _, err = kmc.PatchStatus(ctx, r.Client, bookServer, func(obj client.Object) client.Object {
+			in := obj.(*apiserverv1alpha1.BookServer)
+			in.Status.Phase = apiserverv1alpha1.BookServerPending
+			in.Status.ChildDeployment = childName
+			return in
+		})
 		if err != nil {
-			klog.Error(err, "unable to fetch deployment")
-			fmt.Println("unable to fetch deployment")
+			klog.Error("failed to patch the status first time")
+			fmt.Println("failed to patch the status first time")
 			return ctrl.Result{}, err
 		}
 
-		if err := r.Client.Create(ctx, dep); err != nil {
-			klog.Error(err, "unable to create deployment")
-			fmt.Println("unable to create deployment")
+		dep, err := constructNewDeploymentForBookServer(bookServer, *childName)
+		if err != nil {
+			klog.Error("failed to construct the deployment")
+			fmt.Println("failed to construct the deployment")
 			return ctrl.Result{}, err
 		}
-		bookServer.Status.ChildDeployment = &dep.Name
+
+		_, _, err = kmc.CreateOrPatch(ctx, r.Client, dep, func(obj client.Object, createOp bool) client.Object {
+			return dep
+		})
+		if err != nil {
+			klog.Error("failed to create new deployment for first time")
+			fmt.Println("failed to create new deployment for first time")
+			return ctrl.Result{}, err
+		}
+
+	} else {
+		_, _, err = kmc.CreateOrPatch(ctx, r.Client, childDep, func(obj client.Object, createOp bool) client.Object {
+			in := obj.(*appsv1.Deployment)
+			in.Spec.Replicas = bookServer.Spec.Replicas
+			return in
+		})
+		if err != nil {
+			klog.Error("failed to create or patch deployment")
+			fmt.Println("failed to create or patch deployment")
+			return ctrl.Result{}, err
+		}
 	}
 
-	fmt.Println("deployment created....")
+	fmt.Println("deployment patched or created")
 
-	fmt.Println("Spec Replicas: ", *bookServer.Spec.Replicas)
-	if bookServer.Status.AvailableReplicas == nil {
-		bookServer.Status.AvailableReplicas = bookServer.Spec.Replicas
+	//PATCH the changes
+	//------------------------------------------------------
+	_, _, err = kmc.PatchStatus(ctx, r.Client, bookServer, func(obj client.Object) client.Object {
+		in := obj.(*apiserverv1alpha1.BookServer)
+		in.Status.AvailableReplicas = bookServer.Spec.Replicas
+		in.Status.Phase = apiserverv1alpha1.BookServerPending
+
+		return in
+	})
+	if err != nil {
+		klog.Error("failed to patch the status")
+		fmt.Println("failed to patch the status")
+		return ctrl.Result{}, err
 	}
-
-	fmt.Println("Status Replicas: ", *bookServer.Status.AvailableReplicas)
 
 	return ctrl.Result{}, nil
 }
@@ -168,5 +209,9 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *BookServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apiserverv1alpha1.BookServer{}).
+		Watches(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForOwner{
+			OwnerType:    &apiserverv1alpha1.BookServer{},
+			IsController: false,
+		}).
 		Complete(r)
 }

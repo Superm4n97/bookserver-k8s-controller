@@ -37,9 +37,9 @@ type BookServerSpec struct {
 type BookServerStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-
-	AvailableReplicas *int32  `json:"availableReplicas"`
-	ChildDeployment   *string `json:"childDeployment"`
+	Phase             BookServerPhase `json:"phase"`
+	AvailableReplicas *int32          `json:"availableReplicas"`
+	ChildDeployment   *string         `json:"childDeployment"`
 }
 
 //+kubebuilder:object:root=true
