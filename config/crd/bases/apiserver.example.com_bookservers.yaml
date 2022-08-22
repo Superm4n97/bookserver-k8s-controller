@@ -96,8 +96,11 @@ spec:
               availableReplicas:
                 format: int32
                 type: integer
+              childDeployment:
+                type: string
             required:
             - availableReplicas
+            - childDeployment
             type: object
         type: object
     served: true

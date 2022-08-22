@@ -27,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"time"
 
 	apiserverv1alpha1 "github.com/Superm4n97/custom-controller/api/v1alpha1"
 )
@@ -39,6 +40,10 @@ type BookServerReconciler struct {
 
 func intToPointer(a int32) *int32 {
 	return &a
+}
+
+func getCurrentTime() time.Time {
+	return time.Now()
 }
 
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers,verbs=get;list;watch;create;update;patch;delete
@@ -64,21 +69,34 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var bookServer apiserverv1alpha1.BookServer
 	if err := r.Get(ctx, req.NamespacedName, &bookServer); err != nil {
 		fmt.Println("unable to fetch the book server")
-		//klog.Error(err, "unable to fetch the book server")
+		klog.Error(err, "unable to fetch the book server")
+
 		return ctrl.Result{}, err
+	}
+
+	getOwnerReference := func(bs *apiserverv1alpha1.BookServer) []metav1.OwnerReference {
+		return []metav1.OwnerReference{
+			{
+				APIVersion: bs.APIVersion,
+				Kind:       bs.Kind,
+				Name:       bs.Name,
+				UID:        bs.UID,
+			},
+		}
 	}
 
 	constructNewDeploymentForBookServer := func(bs *apiserverv1alpha1.BookServer) (*v13.Deployment, error) {
 
+		depName := fmt.Sprintf("%s-%d", bs.Name, getCurrentTime().Unix())
+		fmt.Println(depName)
 		newDep := v13.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      bs.Name,
-				Labels:    bs.Labels,
-				Namespace: bs.Namespace,
+				Name:            depName,
+				Labels:          bs.Labels,
+				Namespace:       bs.Namespace,
+				OwnerReferences: getOwnerReference(bs),
 			},
 			Spec: v13.DeploymentSpec{
-				//Selector: &metav1.LabelSelector{MatchLabels: bs.Spec.Selector},
-				//Selector: &metav1.LabelSelector{bs.Spec.Selector},
 				Selector: &bs.Spec.Selector,
 				Replicas: bs.Spec.Replicas,
 
@@ -106,31 +124,41 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return &newDep, nil
 	}
 
-	if bookServer.Status.AvailableReplicas == nil {
+	//dlst gets the deployment that created by this book server
+	/*
+		var dlst = v13.Deployment{}
+		if err := r.Get(ctx,namespaceName of the deployment,dlst); err != nil {
+			fmt.Println("No deployment found owing by this book server")
+		} else {
+			fmt.Println("deployment found with size of ", dlst.Size())
+		}
+	*/
+
+	fmt.Println(bookServer.Status.AvailableReplicas)
+
+	if bookServer.Status.ChildDeployment == nil {
 		dep, err := constructNewDeploymentForBookServer(&bookServer)
 		if err != nil {
-			klog.Error(err, "unable to create new deployment")
-			//fmt.Println("unable to fetch deployment")
+			klog.Error(err, "unable to fetch deployment")
+			fmt.Println("unable to fetch deployment")
 			return ctrl.Result{}, err
 		}
 
 		if err := r.Client.Create(ctx, dep); err != nil {
-			klog.Error(err, "unable to create book server")
-			//fmt.Println("unable to create deployment")
+			klog.Error(err, "unable to create deployment")
+			fmt.Println("unable to create deployment")
 			return ctrl.Result{}, err
 		}
+		bookServer.Status.ChildDeployment = &dep.Name
 	}
 
 	fmt.Println("deployment created....")
 
-	//*bookServer.Status.AvailableReplicas = *bookServer.Spec.Replicas
-
-	if err := r.Update(ctx, &bookServer); err != nil {
-		klog.Error(err, "unable to update the book server")
-		return ctrl.Result{}, err
+	fmt.Println("Spec Replicas: ", *bookServer.Spec.Replicas)
+	if bookServer.Status.AvailableReplicas == nil {
+		bookServer.Status.AvailableReplicas = bookServer.Spec.Replicas
 	}
 
-	fmt.Println("Spec Replicas: ", *bookServer.Spec.Replicas)
 	fmt.Println("Status Replicas: ", *bookServer.Status.AvailableReplicas)
 
 	return ctrl.Result{}, nil

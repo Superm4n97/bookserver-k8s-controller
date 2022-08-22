@@ -1,6 +1,0 @@
-apiVersion: apiserver.example.com/v1alpha1
-kind: BookServer
-metadata:
-  name: bookserver-sample
-spec:
-  # TODO(user): Add fields here

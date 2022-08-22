@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: y
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      rasel: hossain
+  template:
+    metadata:
+      labels:
+        rasel: hossain
+    spec:
+      containers:
+      - name: test
+        image: superm4n/test-app:v0.0.1
