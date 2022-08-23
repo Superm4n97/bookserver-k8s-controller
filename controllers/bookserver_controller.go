@@ -118,7 +118,6 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	bs := &apiserverv1alpha1.BookServer{}
 	if err := r.Get(ctx, key, bs); err != nil {
 		klog.Error("failed to get book server")
-		fmt.Println("failed to get book server")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -137,18 +136,11 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			isNeedToCreateNewChild = true
 		} else {
 			klog.Error("failed to get child deployment")
-			fmt.Println("failed to get child deployment")
 			return ctrl.Result{}, err
 		}
 	}
 
 	if isNeedToCreateNewChild == true { // Create a new child
-
-		if childName == nil {
-			fmt.Println("child name before is nil")
-		} else {
-			fmt.Println("child name before: ", *childName)
-		}
 
 		//get a new child name
 		childName = getNewName(&bs.Name)
@@ -162,7 +154,6 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return in
 		})
 		if err != nil {
-			fmt.Println("failed to patch the child name in book server")
 			klog.Error("failed to patch the child name in book server")
 			return ctrl.Result{}, err
 		}
@@ -172,7 +163,6 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 		if err := r.Client.Create(ctx, childDep); err != nil {
 			klog.Error("failed to create child deployment")
-			fmt.Println("failed to create child deployment")
 			return ctrl.Result{}, err
 		}
 
@@ -183,21 +173,23 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return in
 		})
 		if err != nil {
-			fmt.Println("failed to update the existing deployment")
 			klog.Error("failed to update the existing deployment")
 			return ctrl.Result{}, err
 		}
 	}
 
 	//patch book server status
-	_, _, err := kmc.CreateOrPatch(ctx, r.Client, bs, func(obj client.Object, createOp bool) client.Object {
+	_, _, err := kmc.PatchStatus(ctx, r.Client, bs, func(obj client.Object) client.Object {
 		in := obj.(*apiserverv1alpha1.BookServer)
 		in.Status.AvailableReplicas = bs.Spec.Replicas
-		in.Status.Phase = apiserverv1alpha1.BookServerRunning
+		if *childDep.Spec.Replicas == childDep.Status.AvailableReplicas {
+			in.Status.Phase = apiserverv1alpha1.BookServerRunning
+		} else {
+			in.Status.Phase = apiserverv1alpha1.BookServerPending
+		}
 		return in
 	})
 	if err != nil {
-		fmt.Println("failed to update book status")
 		klog.Error("failed to update the book server")
 		return ctrl.Result{}, err
 	}
