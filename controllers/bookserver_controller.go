@@ -131,7 +131,7 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		isNeedToCreateNewChild = true
 	} else {
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: bs.Namespace, Name: *childName}, childDep); err == nil {
-			childDep.DeepCopy()
+			childDep = childDep.DeepCopy()
 		} else if client.IgnoreNotFound(err) == nil {
 			isNeedToCreateNewChild = true
 		} else {
