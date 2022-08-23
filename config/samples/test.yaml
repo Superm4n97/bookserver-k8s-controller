@@ -3,7 +3,7 @@ kind: BookServer
 metadata:
   name: rasel
 spec:
-  replicas: 7
+  replicas: 3
   selector:
     matchLabels:
       app : bookServer

@@ -56,6 +56,11 @@ func getOwnerReference(bs *apiserverv1alpha1.BookServer) []metav1.OwnerReference
 	}
 }
 
+func getNewName(bsName *string) *string {
+	st := fmt.Sprintf("%s-%d", *bsName, getCurrentTime().Unix())
+	return &st
+}
+
 func constructNewDeploymentForBookServer(bs *apiserverv1alpha1.BookServer, depName string) (*appsv1.Deployment, error) {
 	fmt.Println(depName)
 	newDep := appsv1.Deployment{
@@ -93,7 +98,6 @@ func constructNewDeploymentForBookServer(bs *apiserverv1alpha1.BookServer, depNa
 	return &newDep, nil
 }
 
-//+kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase"
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=apiserver.example.com,resources=bookservers/finalizers,verbs=update
@@ -111,94 +115,90 @@ func (r *BookServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	_ = log.FromContext(ctx)
 
 	key := req.NamespacedName
-
-	klog.Info("Get event for BooksServer name: ", key.Name, " in namespace: ", key.Namespace)
-
-	fmt.Println("Event occurred")
-
-	bookServer := &apiserverv1alpha1.BookServer{}
-	if err := r.Get(ctx, req.NamespacedName, bookServer); err != nil {
-		fmt.Println("unable to fetch the book server")
-		klog.Error(err, "unable to fetch the book server")
-
+	bs := &apiserverv1alpha1.BookServer{}
+	if err := r.Get(ctx, key, bs); err != nil {
+		klog.Error("failed to get book server")
+		fmt.Println("failed to get book server")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	bookServer = bookServer.DeepCopy()
 
-	// first time create / deployment missing --> new deployment create
-	// deployment  --> check deployment selector, replicas match or not with BookServer
+	bs = bs.DeepCopy()
 
-	fmt.Println("current book server replicas: ", *bookServer.Spec.Replicas)
-
-	//create a deployment if not present
-	//------------------------------------------------
-
-	childName := bookServer.Status.ChildDeployment
+	isNeedToCreateNewChild := false
+	childName := bs.Status.ChildDeployment
 	childDep := &appsv1.Deployment{}
-	err := r.Client.Get(ctx, client.ObjectKey{Name: bookServer.Name, Namespace: bookServer.Namespace}, childDep)
-	if err != nil && client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, err
-	}
 
-	if childName == nil || client.IgnoreNotFound(err) == nil {
-		st := fmt.Sprintf("%s-%d", bookServer.Name, getCurrentTime().Unix())
-		childName = &st
-
-		_, _, err = kmc.PatchStatus(ctx, r.Client, bookServer, func(obj client.Object) client.Object {
-			in := obj.(*apiserverv1alpha1.BookServer)
-			in.Status.Phase = apiserverv1alpha1.BookServerPending
-			in.Status.ChildDeployment = childName
-			return in
-		})
-		if err != nil {
-			klog.Error("failed to patch the status first time")
-			fmt.Println("failed to patch the status first time")
-			return ctrl.Result{}, err
-		}
-
-		dep, err := constructNewDeploymentForBookServer(bookServer, *childName)
-		if err != nil {
-			klog.Error("failed to construct the deployment")
-			fmt.Println("failed to construct the deployment")
-			return ctrl.Result{}, err
-		}
-
-		_, _, err = kmc.CreateOrPatch(ctx, r.Client, dep, func(obj client.Object, createOp bool) client.Object {
-			return dep
-		})
-		if err != nil {
-			klog.Error("failed to create new deployment for first time")
-			fmt.Println("failed to create new deployment for first time")
-			return ctrl.Result{}, err
-		}
-
+	if childName == nil {
+		isNeedToCreateNewChild = true
 	} else {
-		_, _, err = kmc.CreateOrPatch(ctx, r.Client, childDep, func(obj client.Object, createOp bool) client.Object {
-			in := obj.(*appsv1.Deployment)
-			in.Spec.Replicas = bookServer.Spec.Replicas
-			return in
-		})
-		if err != nil {
-			klog.Error("failed to create or patch deployment")
-			fmt.Println("failed to create or patch deployment")
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: bs.Namespace, Name: *childName}, childDep); err == nil {
+			childDep.DeepCopy()
+		} else if client.IgnoreNotFound(err) == nil {
+			isNeedToCreateNewChild = true
+		} else {
+			klog.Error("failed to get child deployment")
+			fmt.Println("failed to get child deployment")
 			return ctrl.Result{}, err
 		}
 	}
 
-	fmt.Println("deployment patched or created")
+	if isNeedToCreateNewChild == true { // Create a new child
 
-	//PATCH the changes
-	//------------------------------------------------------
-	_, _, err = kmc.PatchStatus(ctx, r.Client, bookServer, func(obj client.Object) client.Object {
+		if childName == nil {
+			fmt.Println("child name before is nil")
+		} else {
+			fmt.Println("child name before: ", *childName)
+		}
+
+		//get a new child name
+		childName = getNewName(&bs.Name)
+
+		//patching the child name first
+		_, _, err := kmc.PatchStatus(ctx, r.Client, bs, func(obj client.Object) client.Object {
+			in := obj.(*apiserverv1alpha1.BookServer)
+			in.Status.ChildDeployment = childName
+			in.Status.Phase = apiserverv1alpha1.BookServerPending
+
+			return in
+		})
+		if err != nil {
+			fmt.Println("failed to patch the child name in book server")
+			klog.Error("failed to patch the child name in book server")
+			return ctrl.Result{}, err
+		}
+
+		// create new deployment
+		childDep, _ = constructNewDeploymentForBookServer(bs, *childName)
+
+		if err := r.Client.Create(ctx, childDep); err != nil {
+			klog.Error("failed to create child deployment")
+			fmt.Println("failed to create child deployment")
+			return ctrl.Result{}, err
+		}
+
+	} else { // patch (update) existing deployment
+		_, _, err := kmc.CreateOrPatch(ctx, r.Client, childDep, func(obj client.Object, createOp bool) client.Object {
+			in := obj.(*appsv1.Deployment)
+			in.Spec.Replicas = bs.Spec.Replicas
+			return in
+		})
+		if err != nil {
+			fmt.Println("failed to update the existing deployment")
+			klog.Error("failed to update the existing deployment")
+			return ctrl.Result{}, err
+		}
+	}
+
+	//patch book server status
+	_, _, err := kmc.CreateOrPatch(ctx, r.Client, bs, func(obj client.Object, createOp bool) client.Object {
 		in := obj.(*apiserverv1alpha1.BookServer)
-		in.Status.AvailableReplicas = bookServer.Spec.Replicas
-		in.Status.Phase = apiserverv1alpha1.BookServerPending
-
+		in.Status.AvailableReplicas = bs.Spec.Replicas
+		in.Status.Phase = apiserverv1alpha1.BookServerRunning
 		return in
 	})
 	if err != nil {
-		klog.Error("failed to patch the status")
-		fmt.Println("failed to patch the status")
+		fmt.Println("failed to update book status")
+		klog.Error("failed to update the book server")
 		return ctrl.Result{}, err
 	}
 
